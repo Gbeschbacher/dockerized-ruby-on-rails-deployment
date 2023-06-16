@@ -1,0 +1,82 @@
+name: Build and deploy Docker Image to ECR/EC2
+run-name: ${{ github.actor }} builds and deploys Image to ECR/EC2 🚀
+on:
+  push:
+    branches: [ "main" ]
+env:
+  ECR_IMAGE_TAG: app-${{ github.sha }}
+jobs:
+  build:
+    name: Build Image
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v3
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ vars.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Setup docker buildx for cache
+      uses: docker/setup-buildx-action@v2
+
+    - name: Build, tag, and push image to Amazon ECR
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.login-ecr.outputs.registry }}/${{ vars.AWS_ECR_REPOSITORY_NAME }}:${{ env.ECR_IMAGE_TAG }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        provenance: false
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Copy docker-compose configurations to EC2
+      uses: appleboy/scp-action@v0.1.4
+      with:
+        host: ${{ secrets.SSH_IP }}
+        username: ${{ secrets.SSH_USER}}
+        key: ${{ secrets.SSH_KEY }}
+        port: ${{ secrets.SSH_PORT }}
+        source: "docker-compose.yml,docker-compose.production.yml,docker-compose.override.yml"
+        target: "~/app/"
+    - name: Pull current docker image on EC2
+      env:
+        ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+        ECR_REPOSITORY: ${{ vars.AWS_ECR_REPOSITORY_NAME }}
+        ECR_IMAGE_TAG: ${{ env.ECR_IMAGE_TAG }}
+      uses: appleboy/ssh-action@v0.1.10
+      with:
+        host: ${{ secrets.SSH_IP }}
+        username: ${{ secrets.SSH_USER}}
+        key: ${{ secrets.SSH_KEY }}
+        port: ${{ secrets.SSH_PORT }}
+        envs: ACME_EMAIL,ECR_REPOSITORY,ECR_IMAGE_TAG
+        script: |
+          ./ecr_login.sh
+          cd app/
+          aws_account_id="$(aws sts get-caller-identity --query Account --output text)"
+          aws_region="$(aws configure get region)"
+          image_link="$aws_account_id.dkr.ecr.$aws_region.amazonaws.com/$ECR_REPOSITORY:$ECR_IMAGE_TAG"
+          acme_email="gbeschbacher@gmail.com"
+          docker pull $image_link
+          ACME_EMAIL=$ACME_EMAIL IMAGE=$image_link docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --remove-orphans
+    - name: Clean up docker data on EC2
+      uses: appleboy/ssh-action@v0.1.10
+      with:
+        host: ${{ secrets.SSH_IP }}
+        username: ${{ secrets.SSH_USER}}
+        key: ${{ secrets.SSH_KEY }}
+        port: ${{ secrets.SSH_PORT }}
+        script: |
+          docker system prune -af

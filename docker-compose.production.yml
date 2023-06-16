@@ -1,0 +1,10 @@
+version: "3"
+services:
+  app:
+    image: "${IMAGE}"
+    volumes:
+      - ../.aws:/root/.aws
+    labels:
+      - "traefik.http.routers.app.rule=Host(`ec2-3-78-84-52.eu-central-1.compute.amazonaws.com`)"
+      - "traefik.http.routers.app.entrypoints=websecure"
+      - "traefik.http.routers.app.tls.certresolver=myresolver"

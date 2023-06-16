@@ -1,0 +1,48 @@
+version: "3"
+
+x-db-data-url: &db-data-url
+  DATABASE_URL: postgres://app:app@db:5432/app
+
+services:
+  app:
+    environment:
+      <<: *db-data-url
+      RAILS_ENV: production
+    labels:
+      - "traefik.enable=true"
+    networks:
+     - app
+
+  reverse-proxy:
+    image: traefik:v2.10
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entryPoints.web.address=:80"
+
+
+      # Debug
+      - "--log.level=DEBUG"
+      - "--api.insecure=true"
+
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      #- "--certificatesresolvers.myresolver.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+      - "--certificatesresolvers.myresolver.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+
+    ports:
+      - "443:443"
+      - "8080:8080"
+    restart: always
+    volumes:
+      - letsencrypt:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - app
+
+volumes:
+  letsencrypt:
+
+networks:
+  app:

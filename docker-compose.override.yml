@@ -1,0 +1,50 @@
+version: "3"
+
+x-db-data-environment: &db-data-environment
+  POSTGRES_USER: user
+  POSTGRES_PASSWORD: password
+  POSTGRES_DB: app
+  POSTGRES_PORT: 5432
+  POSTGRES_HOST: db
+
+x-db-data-url: &db-data-url
+  DATABASE_URL: postgres://user:password@db:5432/app
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000"
+    volumes:
+      - .:/usr/src/app
+    command: bash -c "rm -f tmp/pids/server.pid && bundle install && rails s -b 0.0.0.0"
+    depends_on:
+      - db
+    restart: unless-stopped
+    environment:
+      <<: *db-data-url
+      RAILS_ENV: development
+    tty: true
+    stdin_open: true
+    labels:
+      - "traefik.http.routers.app.rule=Host(`app.lvh.me`)"
+  db:
+    image: postgres:15.3
+    ports:
+      - "5432:5432"
+    environment:
+      <<: *db-data-environment
+      EDITOR: vim
+    volumes:
+      - app-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - app
+  reverse-proxy:
+    command:
+      - "--api.insecure=true"
+    ports:
+      - "8080:8080"
+
+volumes:
+  app-postgres:

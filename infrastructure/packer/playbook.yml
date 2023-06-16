@@ -1,0 +1,115 @@
+---
+- hosts: all
+  gather_facts: false
+  become: yes
+  vars:
+    docker_version: "5:24.0.2-1~ubuntu.20.04~focal"
+    docker_compose_version: "2.18.1"
+    docker_plugin_folder: "/usr/local/lib/docker/cli-plugins"
+  tasks:
+    - name: Include vars of build_atrifacts/playbook-variables.yml into the 'variables' variable
+      ansible.builtin.include_vars:
+        file: build_artifacts/playbook_variables.yml
+        name: variables
+
+    - name: Install required system packages
+      apt:
+        pkg:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: latest
+        update_cache: true
+
+    - name: Install Python
+      raw: test -e /usr/bin/python3 || (apt-get update && apt-get install -y python3-minimal)
+
+    - name: Install pip3
+      apt: name=python3-pip state=present
+
+    - name: Install awscli
+      pip:
+        name: awscli
+
+    - name: Add docker GPG apt key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add docker repository
+      apt_repository:
+        repo: deb https://download.docker.com/linux/ubuntu focal stable
+        state: present
+
+    - name: Update apt and install docker-ce
+      apt:
+        name: docker-ce={{docker_version}}
+        state: present
+        update_cache: true
+
+    - name: Create docker cli-plugin folder
+      shell: |
+        mkdir -p "{{ docker_plugin_folder }}"
+
+    - name: Install docker-compose
+      get_url:
+        url: "https://github.com/docker/compose/releases/download/v{{ docker_compose_version }}/docker-compose-linux-x86_64"
+        dest: "{{ docker_plugin_folder }}"
+        force: true
+        mode: "0755"
+
+    - name: Copy AWS Config
+      copy:
+        src: "{{ playbook_dir }}/build_artifacts/.aws/"
+        dest: /root/.aws
+
+    - name: Copy ecr_login.sh
+      copy:
+        src: "{{ playbook_dir }}/../scripts/ecr_login.sh"
+        dest: /root/ecr_login.sh
+        mode: "0755"
+
+    - name: Cron ECR Login
+      cron:
+        name: aws ecr login
+        hour: "*/10"
+        minute: "0"
+        job: "/root/ecr_login.sh"
+
+    - name: Cron ECR Login on reboot
+      cron:
+        name: aws ecr login on reboot
+        special_time: reboot
+        job: "/root/ecr_login.sh"
+
+    - name: Create app directory
+      file:
+        path: /root/app
+        state: directory
+
+    - name: Set up authorized_keys in root
+      copy:
+        src: "{{ playbook_dir }}/build_artifacts/authorized_keys"
+        dest: /root/.ssh/authorized_keys
+        mode: 0400
+
+    - name: Update ssh port
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^Port '
+        line: "Port {{ variables.AWS_EC2_SSH_CONNECTION_PORT }}"
+      notify: "Restart sshd"
+
+    - name: Disable password authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PasswordAuthentication '
+        line: "PasswordAuthentication no"
+      notify: "Restart sshd"
+
+  handlers:
+    - name: Restart sshd
+      service:
+        name: sshd
+        state: restarted
